@@ -864,7 +864,7 @@ pub fn generate_code(block: &ValidatedRegisterBlock, options: Options) -> TokenS
                         pub fn #subblock_fn_name(&self, index: usize) -> #subblock_name<&TMmio> {
                             assert!(index < #len);
                             #subblock_name{
-                                ptr: unsafe { self.ptr.add((#start_offset + index * #stride) / core::mem::size_of::<#raw_ptr_type>()) }
+                                ptr: unsafe { self.ptr.add((#start_offset + index * #stride) / core::mem::size_of::<#raw_ptr_type>()) },
                                 mmio: core::borrow::Borrow::borrow(&self.mmio),
                             }
                         }
