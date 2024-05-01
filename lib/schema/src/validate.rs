@@ -18,6 +18,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::rc::Rc;
+use std::str::FromStr;
 
 #[derive(Debug)]
 pub enum ValidationError {
@@ -53,6 +54,38 @@ pub enum ValidationError {
         variant_value: u32,
         variant_name0: String,
         variant_name1: String,
+    },
+    PrefixNotFound {
+        prefix: String,
+    },
+    UnableToParseArraySuffix {
+        register_name: String,
+        suffix: String,
+    },
+    RegisterArrayNotContiguous {
+        register_prefix: String,
+        expected_index: usize,
+        actual_index: usize,
+    },
+    RegisterArrayInconsistentTypes {
+        reg_name_a: String,
+        reg_name_b: String,
+        type_a: String,
+        type_b: String,
+    },
+    RegisterArrayInconsistentDefaultVal {
+        reg_name_a: String,
+        reg_name_b: String,
+        default_val_a: u64,
+        default_val_b: u64,
+    },
+    RegisterArrayInconsistentOffset {
+        reg_name: String,
+        expected_offset: u64,
+        actual_offset: u64,
+    },
+    RegisterArrayInconsistentDimensions {
+        reg_name: String,
     },
 }
 impl Display for ValidationError {
@@ -113,6 +146,54 @@ impl Display for ValidationError {
                 variant_name1,
             } => {
                 write!(f, "Duplicate enum variants with value {variant_value}: {block_name}::{enum_name}::{{{variant_name0},{variant_name1}}}")
+            }
+            ValidationError::PrefixNotFound { prefix } => {
+                write!(f, "Register prefix {prefix} not found")
+            }
+            ValidationError::UnableToParseArraySuffix {
+                register_name,
+                suffix,
+            } => {
+                write!(
+                    f,
+                    "While extracting register {register_name} into array, unable to parse array suffix {suffix:?} as index"
+                )
+            }
+            ValidationError::RegisterArrayNotContiguous {
+                register_prefix,
+                expected_index,
+                actual_index,
+            } => {
+                write!(f, "While extracting array, registers not contiguous; expected register {register_prefix}{expected_index}, instead found register {register_prefix}{actual_index}")
+            }
+            ValidationError::RegisterArrayInconsistentTypes {
+                reg_name_a,
+                reg_name_b,
+                type_a,
+                type_b,
+            } => {
+                write!(
+                    f,
+                    "Inconsistent types when combining registers {reg_name_a} and {reg_name_b} into array: {type_a} != {type_b}"
+                )
+            }
+            ValidationError::RegisterArrayInconsistentDefaultVal {
+                reg_name_a,
+                reg_name_b,
+                default_val_a,
+                default_val_b,
+            } => {
+                write!(f, "Inconsistent default values when combining registers {reg_name_a} and {reg_name_b} into array: {default_val_a:?} != {default_val_b:?}")
+            }
+            ValidationError::RegisterArrayInconsistentOffset {
+                reg_name,
+                expected_offset,
+                actual_offset,
+            } => {
+                write!(f, "Inconsistent register array offset in {reg_name}: expected {expected_offset} but was {actual_offset}")
+            }
+            ValidationError::RegisterArrayInconsistentDimensions { reg_name } => {
+                write!(f, "Inconsistent register array dimensions in {reg_name}")
             }
         }
     }
@@ -206,6 +287,83 @@ impl ValidatedRegisterBlock {
             .drain()
             .filter(|(_, ty)| pred(ty))
             .collect();
+    }
+
+    pub fn extract_array(&mut self, prefix: &str) -> Result<(), ValidationError> {
+        let mut matching_registers = vec![];
+        self.block.registers.retain_mut(|reg| {
+            if reg.name.starts_with(prefix) {
+                matching_registers.push(reg.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if matching_registers.is_empty() {
+            return Err(ValidationError::PrefixNotFound {
+                prefix: prefix.into(),
+            });
+        }
+        let mut indexes = vec![];
+        for (i, reg) in matching_registers.iter().enumerate() {
+            if reg.ty != matching_registers[0].ty {
+                return Err(ValidationError::RegisterArrayInconsistentTypes {
+                    reg_name_a: matching_registers[0].name.clone(),
+                    reg_name_b: reg.name.clone(),
+                    type_a: format!("{:?}", matching_registers[0].ty),
+                    type_b: format!("{:?}", reg.ty),
+                });
+            }
+            if reg.default_val != matching_registers[0].default_val {
+                return Err(ValidationError::RegisterArrayInconsistentDefaultVal {
+                    reg_name_a: matching_registers[0].name.clone(),
+                    reg_name_b: reg.name.clone(),
+                    default_val_a: matching_registers[0].default_val,
+                    default_val_b: reg.default_val,
+                });
+            }
+            if reg.array_dimensions != matching_registers[0].array_dimensions {
+                return Err(ValidationError::RegisterArrayInconsistentDimensions {
+                    reg_name: reg.name.clone(),
+                });
+            }
+            let stride = reg.ty.width.in_bytes() * reg.array_dimensions.iter().product::<u64>();
+            let expected_offset = matching_registers[0].offset + stride * u64::try_from(i).unwrap();
+            if reg.offset != expected_offset {
+                return Err(ValidationError::RegisterArrayInconsistentOffset {
+                    reg_name: reg.name.clone(),
+                    expected_offset,
+                    actual_offset: reg.offset,
+                });
+            }
+            let suffix = &reg.name[prefix.len()..];
+            indexes.push(usize::from_str(suffix).map_err(|_| {
+                ValidationError::UnableToParseArraySuffix {
+                    register_name: reg.name.clone(),
+                    suffix: suffix.into(),
+                }
+            })?);
+        }
+        let mut array_dimensions = vec![u64::try_from(indexes.len()).unwrap()];
+        array_dimensions.extend_from_slice(&matching_registers[0].array_dimensions);
+        for (expected, actual) in indexes.into_iter().enumerate() {
+            if expected != actual {
+                return Err(ValidationError::RegisterArrayNotContiguous {
+                    register_prefix: prefix.into(),
+                    expected_index: expected,
+                    actual_index: actual,
+                });
+            }
+        }
+        self.block.registers.push(Rc::new(Register {
+            ty: matching_registers[0].ty.clone(),
+            name: prefix.into(),
+            default_val: matching_registers[0].default_val,
+            comment: matching_registers[0].comment.clone(),
+            offset: matching_registers[0].offset,
+            array_dimensions,
+        }));
+        Ok(())
     }
 
     pub fn extract_subblock_array(
@@ -749,5 +907,353 @@ impl RegisterBlock {
             register_types,
             enum_types,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Register, RegisterBlock, RegisterField, RegisterType};
+
+    #[test]
+    fn test_extract_array() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "unrelated0".into(),
+                    offset: 0,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 20,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data2".into(),
+                    offset: 24,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        block.extract_array("data").unwrap();
+        assert_eq!(
+            block.block,
+            RegisterBlock {
+                name: "block".into(),
+                registers: vec![
+                    Register {
+                        name: "unrelated0".into(),
+                        offset: 0,
+                        ..Default::default()
+                    }
+                    .into(),
+                    Register {
+                        name: "data".into(),
+                        offset: 16,
+                        array_dimensions: vec![3,],
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_array_multidimensional() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "unrelated0".into(),
+                    offset: 0,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    array_dimensions: vec![16],
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 80,
+                    array_dimensions: vec![16],
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data2".into(),
+                    offset: 144,
+                    array_dimensions: vec![16],
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        block.extract_array("data").unwrap();
+        assert_eq!(
+            block.block,
+            RegisterBlock {
+                name: "block".into(),
+                registers: vec![
+                    Register {
+                        name: "unrelated0".into(),
+                        offset: 0,
+                        ..Default::default()
+                    }
+                    .into(),
+                    Register {
+                        name: "data".into(),
+                        offset: 16,
+                        array_dimensions: vec![3, 16,],
+                        ..Default::default()
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_array_dimension_mismatch() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 20,
+                    array_dimensions: vec![2],
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "Inconsistent register array dimensions in data1"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_prefix_not_found() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![Register {
+                name: "data0".into(),
+                offset: 20,
+                ..Default::default()
+            }
+            .into()],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("foo").unwrap_err().to_string(),
+            "Register prefix foo not found"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_type_mismatch() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    ty: RegisterType {
+                        fields: vec![RegisterField {
+                            name: "foo".into(),
+                            width: 5,
+                            ..Default::default()
+                        }
+                        .into()],
+                        ..Default::default()
+                    }
+                    .into(),
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 20,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert!(block
+            .extract_array("data")
+            .unwrap_err()
+            .to_string()
+            .contains("Inconsistent types when combining registers data0 and data1 into array"));
+    }
+
+    #[test]
+    fn test_extract_array_default_val_mismatch() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    default_val: 5,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 20,
+                    default_val: 6,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "Inconsistent default values when combining registers data0 and data1 into array: 5 != 6"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_inconsistent_offset() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 24,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "Inconsistent register array offset in data1: expected 20 but was 24"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_inconsistent_offset_multidimensional() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    array_dimensions: vec![16, 2],
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data1".into(),
+                    offset: 20,
+                    array_dimensions: vec![16, 2],
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "Inconsistent register array offset in data1: expected 144 but was 20"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_noncontiguous_suffix() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "data0".into(),
+                    offset: 16,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "data2".into(),
+                    offset: 20,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "While extracting array, registers not contiguous; expected register data1, instead found register data2"
+        );
+    }
+
+    #[test]
+    fn test_extract_array_unparsable_suffix() {
+        let block = RegisterBlock {
+            name: "block".into(),
+            registers: vec![
+                Register {
+                    name: "dataaa".into(),
+                    offset: 16,
+                    ..Default::default()
+                }
+                .into(),
+                Register {
+                    name: "databb".into(),
+                    offset: 20,
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        let mut block = block.validate_and_dedup().unwrap();
+        assert_eq!(
+            block.extract_array("data").unwrap_err().to_string(),
+            "While extracting register dataaa into array, unable to parse array suffix \"aa\" as index"
+        );
     }
 }
