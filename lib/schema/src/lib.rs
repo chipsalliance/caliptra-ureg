@@ -159,6 +159,12 @@ pub enum FieldType {
 
     /// Write 1 to set a bit, write 0 for no effect,
     W1S,
+
+    /// Write 0 to clear a bit, write 1 for no effect.
+    W0C,
+
+    /// Write 0 to set a bit, write 1 for no effect,
+    W0S,
 }
 impl FieldType {
     pub fn can_read(&self) -> bool {
@@ -170,6 +176,8 @@ impl FieldType {
             FieldType::WRC => false,
             FieldType::W1C => true,
             FieldType::W1S => true,
+            FieldType::W0C => true,
+            FieldType::W0S => true,
         }
     }
     pub fn can_write(&self) -> bool {
@@ -181,6 +189,8 @@ impl FieldType {
             FieldType::WRC => false,
             FieldType::W1C => false,
             FieldType::W1S => false,
+            FieldType::W0C => false,
+            FieldType::W0S => false,
         }
     }
     pub fn can_clear(&self) -> bool {
@@ -192,6 +202,8 @@ impl FieldType {
             FieldType::WRC => false,
             FieldType::W1C => true,
             FieldType::W1S => false,
+            FieldType::W0C => true,
+            FieldType::W0S => false,
         }
     }
     pub fn can_set(&self) -> bool {
@@ -203,6 +215,8 @@ impl FieldType {
             FieldType::WRC => false,
             FieldType::W1C => false,
             FieldType::W1S => true,
+            FieldType::W0C => false,
+            FieldType::W0S => true,
         }
     }
 }
