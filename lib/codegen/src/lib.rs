@@ -211,7 +211,7 @@ fn generate_enum(e: &Enum) -> TokenStream {
                     // This transmute is safe because the check above ensures
                     // that the value has a corresponding enum variant, and the
                     // enum is using repr(u32).
-                    Ok(unsafe { core::mem::transmute(val) } )
+                    Ok(unsafe { core::mem::transmute::<u32, #enum_name>(val) } )
                 } else {
                     Err(())
                 }
@@ -318,7 +318,7 @@ mod generate_enums_test {
                     #[inline (always)]
                     fn try_from(val : u32) -> Result<PullDir, ()> {
                         if val < 4 {
-                            Ok(unsafe { core::mem::transmute(val) })
+                            Ok(unsafe { core::mem::transmute::<u32, PullDir>(val) })
                         } else {
                             Err (())
                         }
@@ -377,9 +377,14 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             (self.0 >> #position) & #mask
         };
         let comment = &field.comment.replace("<br>", "\n");
+        let doc_tokens = if comment.is_empty() {
+            quote! {}
+        } else {
+            quote! { #[doc = #comment] }
+        };
         if field.ty.can_read() {
             read_val_tokens.extend(quote! {
-                #[doc = #comment]
+                #doc_tokens
                 #[inline(always)]
             });
             if let Some(ref enum_type) = field.enum_type {
@@ -405,7 +410,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
         }
         if field.ty.can_write() {
             write_val_tokens.extend(quote! {
-                #[doc = #comment]
+                #doc_tokens
                 #[inline(always)]
             });
             if let Some(ref enum_type) = field.enum_type {
@@ -433,7 +438,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
         if field.ty == FieldType::W1C && field.width == 1 {
             let field_clear_ident = format_ident!("{}_clear", field_ident);
             write_val_tokens.extend(quote! {
-                #[doc = #comment]
+                #doc_tokens
                 #[inline(always)]
                 pub fn #field_clear_ident(self) -> Self {
                     Self(self.0 | (1 << #position))
@@ -443,7 +448,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
         if field.ty == FieldType::W1S && field.width == 1 {
             let field_set_ident = format_ident!("{}_set", field_ident);
             write_val_tokens.extend(quote! {
-                #[doc = #comment]
+                #doc_tokens
                 #[inline(always)]
                 pub fn #field_set_ident(self) -> Self {
                     Self(self.0 | (1 << #position))
@@ -659,8 +664,14 @@ fn generate_block_registers(
             quote! { ureg::Array::new_with_mmio }
         };
 
+        let doc_tokens = if comment.is_empty() {
+            quote! {}
+        } else {
+            quote! { #[doc = #comment] }
+        };
+
         block_tokens.extend(quote!{
-            #[doc = #comment]
+            #doc_tokens
             #[inline(always)]
             pub fn #reg_name(&self) -> #result_type {
                 unsafe { #constructor(self.ptr.wrapping_add(#ptr_offset / core::mem::size_of::<#raw_ptr_type>()),
