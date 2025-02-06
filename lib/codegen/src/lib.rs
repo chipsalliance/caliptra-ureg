@@ -430,6 +430,26 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
                 });
             }
         }
+        if field.ty == FieldType::W0C && field.width == 1 {
+            let field_clear_ident = format_ident!("{}_clear", field_ident);
+            write_val_tokens.extend(quote! {
+                #[doc = #comment]
+                #[inline(always)]
+                pub fn #field_clear_ident(self) -> Self {
+                    Self(self.0 & !(1 << #position))
+                }
+            });
+        }
+        if field.ty == FieldType::W0S && field.width == 1 {
+            let field_set_ident = format_ident!("{}_set", field_ident);
+            write_val_tokens.extend(quote! {
+                #[doc = #comment]
+                #[inline(always)]
+                pub fn #field_set_ident(self) -> Self {
+                    Self(self.0 & !(1 << #position))
+                }
+            });
+        }
         if field.ty == FieldType::W1C && field.width == 1 {
             let field_clear_ident = format_ident!("{}_clear", field_ident);
             write_val_tokens.extend(quote! {
