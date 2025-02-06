@@ -715,6 +715,24 @@ impl<const LEN: usize, TItem: FromMmioPtr<TMmio = TMmio>, TMmio: Mmio + Copy> Ar
             ptr: self.ptr,
         }
     }
+
+    #[inline(always)]
+    pub fn get_sub_array<const NEW_LEN: usize>(
+        &self,
+        start_index: usize,
+    ) -> Option<Array<NEW_LEN, TItem>> {
+        assert!(NEW_LEN <= LEN);
+        let Some(end_index) = start_index.checked_add(NEW_LEN) else {
+            return None;
+        };
+        if end_index > LEN {
+            return None;
+        }
+        Some(Array {
+            mmio: self.mmio,
+            ptr: unsafe { self.ptr.add(start_index) },
+        })
+    }
 }
 impl<const LEN: usize, TMmio: Mmio + Default, TItem: FromMmioPtr<TMmio = TMmio>> Array<LEN, TItem> {
     /// Creates a new Array from a raw register pointer.
@@ -1075,6 +1093,40 @@ mod tests {
         let reg_array =
             unsafe { Array::<4, RegRef<ControlReg, RealMmioMut>>::new(fake_mem.as_mut_ptr()) };
         reg_array.truncate::<5>();
+    }
+
+    #[test]
+    pub fn test_reg_array_subarray() {
+        let mut fake_mem = [0, 1, 2, 3, 4, 5, 6];
+        let reg_array = unsafe {
+            Array::<4, RegRef<ReadWriteReg32<0, u32, u32>, RealMmioMut>>::new(fake_mem.as_mut_ptr())
+        };
+        let sub_array = reg_array.get_sub_array::<3>(1).unwrap();
+        assert_eq!(sub_array.read(), [1, 2, 3]);
+
+        let sub_array = reg_array.get_sub_array::<2>(2).unwrap();
+        assert_eq!(sub_array.read(), [2, 3]);
+
+        let sub_array = reg_array.get_sub_array::<4>(0).unwrap();
+        assert_eq!(sub_array.read(), [0, 1, 2, 3]);
+
+        let sub_array = reg_array.get_sub_array::<0>(0).unwrap();
+        assert_eq!(sub_array.read(), []);
+
+        assert!(reg_array.get_sub_array::<4>(1).is_none());
+
+        assert!(reg_array.get_sub_array::<1>(usize::MAX).is_none());
+        assert!(reg_array.get_sub_array::<2>(usize::MAX).is_none());
+    }
+
+    #[test]
+    #[should_panic]
+    pub fn test_reg_array_subarray_panic() {
+        let mut fake_mem = [0, 1, 2, 3, 4, 5, 6];
+        let reg_array = unsafe {
+            Array::<4, RegRef<ReadWriteReg32<0, u32, u32>, RealMmioMut>>::new(fake_mem.as_mut_ptr())
+        };
+        assert!(reg_array.get_sub_array::<5>(0).is_none());
     }
 
     #[test]
