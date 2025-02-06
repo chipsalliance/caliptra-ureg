@@ -376,7 +376,11 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
         let access_expr = quote! {
             (self.0 >> #position) & #mask
         };
-        let comment = &field.comment.replace("<br>", "\n");
+        let comment = field
+            .comment
+            .replace("<br>", "\n")
+            .trim_start_matches('!')
+            .to_string();
         let doc_tokens = if comment.is_empty() {
             quote! {}
         } else {
@@ -669,7 +673,7 @@ fn generate_block_registers(
             .replace("crate::", "");
         let comment = format!(
             "{}\n\nRead value: [`{read_type_str}`]; Write value: [`{write_type_str}`]",
-            reg.comment.replace("<br>", "\n")
+            reg.comment.replace("<br>", "\n").trim_start_matches('!')
         );
 
         let result_type = generate_array_type(
