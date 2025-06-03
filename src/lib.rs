@@ -367,7 +367,8 @@ impl<TReg: RegType, TMmio: Mmio + Default> RegRef<TReg, TMmio> {
             ptr,
         }
     }
-
+}
+impl<TReg: RegType, TMmio: Mmio> RegRef<TReg, TMmio> {
     /// Returns a pointer to the underlying MMIO register.
     ///
     /// # Safety
