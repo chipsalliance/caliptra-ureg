@@ -847,7 +847,7 @@ pub fn generate_code(block: &ValidatedRegisterBlock, options: Options) -> TokenS
                     /// Returns a register block that can be used to read
                     /// registers from this peripheral, but cannot write.
                     #[inline(always)]
-                    pub fn regs(&self) -> RegisterBlock<ureg::RealMmio> {
+                    pub fn regs(&self) -> RegisterBlock<ureg::RealMmio<'_>> {
                         RegisterBlock{
                             ptr: Self::PTR,
                             mmio: core::default::Default::default(),
@@ -857,7 +857,7 @@ pub fn generate_code(block: &ValidatedRegisterBlock, options: Options) -> TokenS
                     /// Return a register block that can be used to read and
                     /// write this peripheral's registers.
                     #[inline(always)]
-                    pub fn regs_mut(&mut self) -> RegisterBlock<ureg::RealMmioMut> {
+                    pub fn regs_mut(&mut self) -> RegisterBlock<ureg::RealMmioMut<'_>> {
                         RegisterBlock{
                             ptr: Self::PTR,
                             mmio: core::default::Default::default(),
