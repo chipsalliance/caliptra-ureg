@@ -202,19 +202,23 @@ fn generate_enum(e: &Enum) -> TokenStream {
         }
         impl #enum_name {
             #accessor_tokens
+
+            pub const fn from_raw(val: u32) -> Option<#enum_name> {
+                if val < #total_count {
+                    // This transmute is safe because the check above ensures
+                    // that the value has a corresponding enum variant, and the
+                    // enum is using repr(u32).
+                    Some(unsafe { core::mem::transmute::<u32, #enum_name>(val) } )
+                } else {
+                    None
+                }
+            }
         }
         impl TryFrom<u32> for #enum_name {
             type Error = ();
             #[inline(always)]
             fn try_from(val: u32) -> Result<#enum_name, ()> {
-                if val < #total_count {
-                    // This transmute is safe because the check above ensures
-                    // that the value has a corresponding enum variant, and the
-                    // enum is using repr(u32).
-                    Ok(unsafe { core::mem::transmute::<u32, #enum_name>(val) } )
-                } else {
-                    Err(())
-                }
+                #enum_name::from_raw(val).ok_or(())
             }
         }
         impl From<#enum_name> for u32 {
@@ -312,16 +316,19 @@ mod generate_enums_test {
                     pub fn up(&self) -> bool { *self == Self::Up }
                     #[inline(always)]
                     pub fn hi_z(&self) -> bool { *self == Self::HiZ }
+                    pub const fn from_raw (val : u32) -> Option <PullDir> {
+                        if val < 4 {
+                            Some(unsafe { core::mem::transmute::<u32,PullDir>(val)})
+                        } else {
+                            None
+                        }
+                    }
                 }
                 impl TryFrom<u32> for PullDir {
                     type Error = ();
                     #[inline (always)]
                     fn try_from(val : u32) -> Result<PullDir, ()> {
-                        if val < 4 {
-                            Ok(unsafe { core::mem::transmute::<u32, PullDir>(val) })
-                        } else {
-                            Err (())
-                        }
+                        PullDir::from_raw(val).ok_or(())
                      }
                 }
                 impl From<PullDir> for u32 {
@@ -394,19 +401,19 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             if let Some(ref enum_type) = field.enum_type {
                 let enum_type_ident = camel_ident(enum_type.name.as_ref().unwrap());
                 read_val_tokens.extend(quote! {
-                    pub fn #field_ident(&self) -> super::enums::#enum_type_ident {
-                        super::enums::#enum_type_ident::try_from(#access_expr).unwrap()
+                    pub const fn #field_ident(&self) -> super::enums::#enum_type_ident {
+                        super::enums::#enum_type_ident::from_raw(#access_expr).unwrap()
                     }
                 });
             } else if field.width == 1 {
                 read_val_tokens.extend(quote! {
-                    pub fn #field_ident(&self) -> bool {
+                    pub const fn #field_ident(&self) -> bool {
                         (#access_expr) != 0
                     }
                 });
             } else {
                 read_val_tokens.extend(quote! {
-                    pub fn #field_ident(&self) -> #raw_type {
+                    pub const fn #field_ident(&self) -> #raw_type {
                         #access_expr
                     }
                 });
@@ -418,22 +425,27 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
                 #[inline(always)]
             });
             if let Some(ref enum_type) = field.enum_type {
+                let with_field_ident = format_ident!("with_{}", field_ident);
                 let enum_type_ident = camel_ident(enum_type.name.as_ref().unwrap());
                 let enum_selector_type = format_ident!("{}Selector", enum_type_ident);
                 write_val_tokens.extend(quote! {
                     pub fn #field_ident(self, f: impl FnOnce(super::enums::selector::#enum_selector_type) -> super::enums::#enum_type_ident) -> Self {
                         Self((self.0 & !(#mask << #position)) | (#raw_type::from(f(super::enums::selector::#enum_selector_type())) << #position))
                     }
+                    pub const fn #with_field_ident(self, val: super::enums::#enum_type_ident) -> Self {
+                        Self((self.0 & !(#mask << #position)) | ((val as #raw_type) << #position))
+
+                    }
                 });
             } else if field.width == 1 {
                 write_val_tokens.extend(quote! {
-                    pub fn #field_ident(self, val: bool) -> Self {
-                        Self((self.0 & !(#mask << #position)) | (#raw_type::from(val) << #position))
+                    pub const fn #field_ident(self, val: bool) -> Self {
+                        Self((self.0 & !(#mask << #position)) | (val as #raw_type) << #position)
                     }
                 });
             } else {
                 write_val_tokens.extend(quote! {
-                    pub fn #field_ident(self, val: #raw_type) -> Self {
+                    pub const fn #field_ident(self, val: #raw_type) -> Self {
                         Self((self.0 & !(#mask << #position)) | ((val & #mask) << #position))
                     }
                 });
@@ -444,7 +456,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             write_val_tokens.extend(quote! {
                 #[doc = #comment]
                 #[inline(always)]
-                pub fn #field_clear_ident(self) -> Self {
+                pub const fn #field_clear_ident(self) -> Self {
                     Self(self.0 & !(1 << #position))
                 }
             });
@@ -454,7 +466,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             write_val_tokens.extend(quote! {
                 #[doc = #comment]
                 #[inline(always)]
-                pub fn #field_set_ident(self) -> Self {
+                pub const fn #field_set_ident(self) -> Self {
                     Self(self.0 & !(1 << #position))
                 }
             });
@@ -464,7 +476,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             write_val_tokens.extend(quote! {
                 #doc_tokens
                 #[inline(always)]
-                pub fn #field_clear_ident(self) -> Self {
+                pub const fn #field_clear_ident(self) -> Self {
                     Self(self.0 | (1 << #position))
                 }
             });
@@ -474,7 +486,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
             write_val_tokens.extend(quote! {
                 #doc_tokens
                 #[inline(always)]
-                pub fn #field_set_ident(self) -> Self {
+                pub const fn #field_set_ident(self) -> Self {
                     Self(self.0 | (1 << #position))
                 }
             });
@@ -496,7 +508,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
         };
         result.extend(quote! {
             #[derive(Clone, Copy)]
-            pub struct #read_val_ident(#raw_type);
+            pub struct #read_val_ident(pub #raw_type);
             impl #read_val_ident{
                 #read_val_tokens
                 #modify_fn_tokens
@@ -519,7 +531,7 @@ fn generate_register(reg: &RegisterType) -> TokenStream {
     if !write_val_tokens.is_empty() {
         result.extend(quote! {
             #[derive(Clone, Copy)]
-            pub struct #write_val_ident(#raw_type);
+            pub struct #write_val_ident(pub #raw_type);
             impl #write_val_ident{
                 #write_val_tokens
             }
