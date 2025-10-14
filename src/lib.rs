@@ -875,6 +875,15 @@ impl<
         }
     }
 
+    #[inline(always)]
+    pub fn fill(&self, val: TRaw) {
+        for i in 0..LEN {
+            unsafe {
+                self.mmio.write_volatile(self.ptr.add(i), val);
+            }
+        }
+    }
+
     /// Writes the entire contents of the `val` array pointer to the underlying
     /// registers.
     ///
@@ -1067,6 +1076,9 @@ mod tests {
         assert_eq!(&fake_mem[0] as *const _, reg_array.at(0).ptr);
 
         assert_eq!(&fake_mem[3] as *const _, reg_array.at(3).ptr);
+
+        reg_array.fill(14);
+        assert_eq!(&fake_mem, &[14, 14, 14, 14, 4, 5, 6]);
     }
 
     #[test]
