@@ -749,6 +749,7 @@ pub struct OptionsInternal {
     module_path: TokenStream,
     is_root_module: bool,
     add_register_into_methods: bool,
+    generate_interior_mutability_instances: bool,
 
     // TODO: This should probably be a const reference
     extern_types: HashMap<Rc<RegisterType>, ExternType>,
@@ -766,6 +767,10 @@ pub struct Options {
     /// field in RegisterBlock. There are useful for working around some tricky
     /// ownership issues with nested register arrays.
     pub add_register_into_methods: bool,
+
+    /// If True, `${instance_name}IntMut types will be generated that support
+    /// writing to registers from drivers that need interior mutability.
+    pub generate_interior_mutability_instances: bool,
 }
 impl Options {
     fn compile(self) -> OptionsInternal {
@@ -775,6 +780,7 @@ impl Options {
                 is_root_module: true,
                 extern_types: self.extern_types,
                 add_register_into_methods: self.add_register_into_methods,
+                generate_interior_mutability_instances: self.generate_interior_mutability_instances,
             }
         } else {
             let module = self.module;
@@ -783,6 +789,7 @@ impl Options {
                 is_root_module: false,
                 extern_types: self.extern_types,
                 add_register_into_methods: self.add_register_into_methods,
+                generate_interior_mutability_instances: self.generate_interior_mutability_instances,
             }
         }
     }
@@ -893,10 +900,54 @@ pub fn generate_code(block: &ValidatedRegisterBlock, options: Options) -> TokenS
                             mmio: core::default::Default::default(),
                         }
                     }
-
                 }
-
             });
+            if options.generate_interior_mutability_instances {
+                let name_camel_intmut = camel_ident(&format!("{}_int_mut", instance.name));
+                instance_type_tokens.extend(quote! {
+                    /// A zero-sized type that represents ownership of this
+                    /// peripheral, used to get access to a Register lock. Most
+                    /// programs create one of these in unsafe code near the top of
+                    /// main(), and pass it to the driver responsible for managing
+                    /// all access to the hardware.
+                    ///
+                    /// Unlike the non-IntMut instance, this instance allows registers
+                    /// to be mutated with only a `&self` reference, which is
+                    /// useful when constructing a driver that needs to be
+                    /// shared. The driver is responsible for ensuring that shared
+                    /// access to these registers is done in a compatible way.
+                    pub struct #name_camel_intmut {
+                        // Ensure the only way to create this is via Self::new()
+                        _priv: (),
+                    }
+                    impl #name_camel_intmut {
+                        pub const PTR: *mut #raw_ptr_type = #addr as *mut #raw_ptr_type;
+
+                        /// # Safety
+                        ///
+                        /// Caller must ensure that all concurrent use of this
+                        /// peripheral in the firmware is done so in a compatible
+                        /// way. The simplest way to enforce this is to only call
+                        /// this function once.
+                        #[inline(always)]
+                        pub unsafe fn new() -> Self {
+                            Self{
+                                _priv: (),
+                            }
+                        }
+
+                        /// Returns a register block that can be used to read and write
+                        /// registers from this peripheral.
+                        #[inline(always)]
+                        pub fn regs(&self) -> RegisterBlock<ureg::RealMmioMut<'_>> {
+                            RegisterBlock{
+                                ptr: Self::PTR,
+                                mmio: core::default::Default::default(),
+                            }
+                        }
+                   }
+                });
+            }
         }
         generate_block_registers(
             &block.block().registers,
