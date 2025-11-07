@@ -694,6 +694,7 @@ fn generate_block_registers(
                 ureg::RegRef<#module_path::meta::#reg_meta_name, &TMmio>
             },
         );
+
         let constructor = if reg.array_dimensions.is_empty() {
             quote! { ureg::RegRef::new_with_mmio }
         } else {
@@ -706,14 +707,35 @@ fn generate_block_registers(
             quote! { #[doc = #comment] }
         };
 
-        block_tokens.extend(quote!{
+        let pointer_math = quote! {
+            self.ptr.wrapping_add(#ptr_offset / core::mem::size_of::<#raw_ptr_type>())
+        };
+
+        block_tokens.extend(quote! {
             #doc_tokens
             #[inline(always)]
             pub fn #reg_name(&self) -> #result_type {
-                unsafe { #constructor(self.ptr.wrapping_add(#ptr_offset / core::mem::size_of::<#raw_ptr_type>()),
+                unsafe { #constructor(#pointer_math,
                                       core::borrow::Borrow::borrow(&self.mmio)) }
             }
         });
+        if options.add_register_into_methods {
+            let into_reg_name = format_ident!("into_{}", reg_name);
+            let into_result_type = generate_array_type(
+                reg.array_dimensions.iter().cloned(),
+                quote! {
+                    ureg::RegRef<#module_path::meta::#reg_meta_name, TMmio>
+                },
+            );
+            block_tokens.extend(quote!{
+                #doc_tokens
+                #[doc = "This function consumes the entire register block, which is useful when transferring ownership."]
+                #[inline(always)]
+                pub fn #into_reg_name(self) -> #into_result_type {
+                    unsafe { #constructor(#pointer_math, self.mmio) }
+                }
+            });
+        }
     }
 }
 
@@ -726,6 +748,7 @@ pub struct ExternType {
 pub struct OptionsInternal {
     module_path: TokenStream,
     is_root_module: bool,
+    add_register_into_methods: bool,
 
     // TODO: This should probably be a const reference
     extern_types: HashMap<Rc<RegisterType>, ExternType>,
@@ -738,6 +761,11 @@ pub struct Options {
     pub module: TokenStream,
 
     pub extern_types: HashMap<Rc<RegisterType>, ExternType>,
+
+    /// If true, `into_${reg_name}(self)` functions are generated for every
+    /// field in RegisterBlock. There are useful for working around some tricky
+    /// ownership issues with nested register arrays.
+    pub add_register_into_methods: bool,
 }
 impl Options {
     fn compile(self) -> OptionsInternal {
@@ -746,6 +774,7 @@ impl Options {
                 module_path: quote! {crate},
                 is_root_module: true,
                 extern_types: self.extern_types,
+                add_register_into_methods: self.add_register_into_methods,
             }
         } else {
             let module = self.module;
@@ -753,6 +782,7 @@ impl Options {
                 module_path: quote! {crate::#module},
                 is_root_module: false,
                 extern_types: self.extern_types,
+                add_register_into_methods: self.add_register_into_methods,
             }
         }
     }
