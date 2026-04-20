@@ -868,7 +868,7 @@ pub fn generate_code(block: &ValidatedRegisterBlock, options: Options) -> TokenS
                     /// way. The simplest way to enforce this is to only call
                     /// this function once.
                     #[inline(always)]
-                    pub unsafe fn new() -> Self {
+                    pub const unsafe fn new() -> Self {
                         Self{
                             _priv: (),
                         }
